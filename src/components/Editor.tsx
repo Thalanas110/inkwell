@@ -490,10 +490,11 @@ function AnnotationBox({
         dy: number;
       }
     | {
-        mode: "resize";
+      mode: "resize";
         startW: number;
         startH: number;
         aspect: number;
+        startSize: number;
         minW: number;
         minH: number;
       }
@@ -520,7 +521,7 @@ function AnnotationBox({
   };
 
   const onResizePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (!interactive || local.type !== "signature") return;
+    if (!interactive) return;
     e.stopPropagation();
     onSelect();
     const parent = e.currentTarget.parentElement!.parentElement!.getBoundingClientRect();
@@ -531,7 +532,8 @@ function AnnotationBox({
       startW,
       startH,
       aspect: startH / Math.max(1, startW),
-      minW: 56,
+      startSize: data.size ?? (local.type === "check" ? 14 : 12),
+      minW: local.type === "check" ? 16 : 56,
       minH: 24,
     };
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -541,10 +543,11 @@ function AnnotationBox({
     if (!drag.current) return;
     const parent = e.currentTarget.parentElement!.getBoundingClientRect();
     if (drag.current.mode === "move") {
+      const d = drag.current;
       setLocal((l) => ({
         ...l,
-        x: Math.min(0.99, Math.max(0, (e.clientX - drag.current.dx - parent.left) / parent.width)),
-        y: Math.min(0.99, Math.max(0, (e.clientY - drag.current.dy - parent.top) / parent.height)),
+        x: Math.min(0.99, Math.max(0, (e.clientX - d.dx - parent.left) / parent.width)),
+        y: Math.min(0.99, Math.max(0, (e.clientY - d.dy - parent.top) / parent.height)),
       }));
       return;
     }
@@ -554,6 +557,37 @@ function AnnotationBox({
       drag.current.minW,
       Math.min(parent.width - local.x * parent.width, e.clientX - boxLeft),
     );
+
+    if (local.type === "text") {
+      const nextSize = Math.round(drag.current.startSize * (nextW / drag.current.startW));
+      setLocal((l) => ({
+        ...l,
+        w: nextW / parent.width,
+        data: JSON.stringify({
+          ...JSON.parse(l.data || "{}"),
+          size: Math.max(8, Math.min(200, nextSize)),
+        }),
+      }));
+      return;
+    }
+
+    if (local.type === "check") {
+      const nextSize = Math.round(
+        drag.current.startSize * (nextW / Math.max(1, drag.current.startW)),
+      );
+      const nextH = Math.min(parent.height - local.y * parent.height, nextW);
+      setLocal((l) => ({
+        ...l,
+        w: nextW / parent.width,
+        h: nextH / parent.height,
+        data: JSON.stringify({
+          ...JSON.parse(l.data || "{}"),
+          size: Math.max(8, Math.min(200, nextSize)),
+        }),
+      }));
+      return;
+    }
+
     const nextH = Math.max(drag.current.minH, nextW * drag.current.aspect);
 
     setLocal((l) => ({
@@ -572,8 +606,10 @@ function AnnotationBox({
   const style: React.CSSProperties = {
     left: `${local.x * 100}%`,
     top: `${local.y * 100}%`,
-    width: local.type === "check" ? undefined : `${local.w * 100}%`,
-    height: local.type === "signature" ? `${local.h * 100}%` : undefined,
+    width: `${local.w * 100}%`,
+    height:
+      local.type === "signature" ? `${local.h * 100}%` : undefined,
+    aspectRatio: local.type === "check" ? "1" : undefined,
   };
 
   return (
@@ -617,7 +653,11 @@ function AnnotationBox({
           </span>
         )
       ) : local.type === "check" ? (
-        <Check className="text-ink" style={{ width: data.size ?? 14, height: data.size ?? 14 }} />
+        <Check
+          className="block h-full w-full text-ink"
+          strokeWidth={2.25}
+          style={{ width: "100%", height: "100%" }}
+        />
       ) : (
         <img
           src={data.dataUrl}
@@ -639,9 +679,9 @@ function AnnotationBox({
         </button>
       ) : null}
 
-      {selected && interactive && local.type === "signature" ? (
+      {selected && interactive ? (
         <button
-          aria-label="Resize signature"
+          aria-label="Resize item"
           onPointerDown={onResizePointerDown}
           className="absolute -bottom-2 -right-2 h-4 w-4 cursor-se-resize rounded-full border border-background bg-primary shadow"
         />

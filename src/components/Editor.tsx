@@ -6,11 +6,13 @@ import {
   Check,
   Download,
   Loader2,
+  Menu,
   MousePointer2,
   PenLine,
   Plus,
   Trash2,
   Type,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -62,12 +64,25 @@ export function Editor({ docId }: { docId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [zoom, setZoom] = useState(2);
   const [flatten, setFlatten] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [padOpen, setPadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === "undefined" ? 1024 : window.innerWidth,
+  );
   const pageSizes = useRef<Record<number, { width: number; height: number }>>({});
 
-  const pageWidth = PAGE_WIDTHS[zoom] ?? 760;
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const pageWidth =
+    viewportWidth < 768
+      ? Math.min(PAGE_WIDTHS[zoom] ?? 760, Math.max(280, viewportWidth - 32))
+      : (PAGE_WIDTHS[zoom] ?? 760);
 
   const refreshSignatures = useCallback(async () => {
     const rows = await listSignatures();
@@ -237,7 +252,7 @@ export function Editor({ docId }: { docId: string }) {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-card px-4">
+      <header className="editor-header flex h-14 shrink-0 items-center gap-3 border-b bg-card px-4">
         <Button asChild variant="ghost" size="icon" aria-label="Back to library">
           <Link to="/">
             <ArrowLeft className="size-4" />
@@ -247,9 +262,19 @@ export function Editor({ docId }: { docId: string }) {
           value={doc?.name ?? ""}
           onChange={(e) => setDoc((d) => (d ? { ...d, name: e.target.value } : d))}
           onBlur={(e) => doc && renameDocument(doc.id, e.target.value.trim() || "Untitled.pdf")}
-          className="w-72 truncate rounded-md bg-transparent px-2 py-1 text-sm font-medium outline-none focus:bg-secondary"
+          className="editor-title w-72 truncate rounded-md bg-transparent px-2 py-1 text-sm font-medium outline-none focus:bg-secondary"
         />
-        <div className="ml-auto flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={mobileMenuOpen ? "Close document actions" : "Open document actions"}
+          aria-expanded={mobileMenuOpen}
+          onClick={() => setMobileMenuOpen((open) => !open)}
+          className="editor-menu-button ml-auto md:hidden"
+        >
+          {mobileMenuOpen ? <X className="size-4" /> : <Menu className="size-4" />}
+        </Button>
+        <div className={`editor-actions ${mobileMenuOpen ? "is-open" : ""} ml-auto flex items-center gap-2`}>
           <Button
             variant="ghost"
             size="icon"
@@ -281,9 +306,9 @@ export function Editor({ docId }: { docId: string }) {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="editor-body flex min-h-0 flex-1">
         {/* Tools */}
-        <aside className="flex w-64 shrink-0 flex-col border-r bg-sidebar">
+        <aside className="editor-tools flex w-64 shrink-0 flex-col border-r bg-sidebar">
           <div className="space-y-1 p-3">
             <p className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Tools
@@ -362,7 +387,7 @@ export function Editor({ docId }: { docId: string }) {
         </aside>
 
         {/* Pages */}
-        <main className="grain min-h-0 flex-1 overflow-auto bg-background p-8">
+        <main className="editor-main grain min-h-0 flex-1 overflow-auto bg-background p-8">
           {!pdf ? (
             <div className="flex h-full items-center justify-center text-muted-foreground">
               <Loader2 className="mr-2 size-4 animate-spin" /> Loading document…
@@ -398,7 +423,7 @@ export function Editor({ docId }: { docId: string }) {
         </main>
 
         {/* Form fields */}
-        <aside className="flex w-80 shrink-0 flex-col border-l bg-sidebar">
+        <aside className="editor-fields flex w-80 shrink-0 flex-col border-l bg-sidebar">
           <p className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Form fields {fields.length ? `(${fields.length})` : ""}
           </p>

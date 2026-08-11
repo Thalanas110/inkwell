@@ -1,23 +1,69 @@
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, nativeImage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
 
 const DEV_URL = process.env.ELECTRON_START_URL || "";
+const STORAGE_FOLDER_NAME = "Inkwell";
 
-function userDir(sub) {
-  const dir = path.join(app.getPath("userData"), sub);
+function loadAppIcon() {
+  const iconPath = path.join(__dirname, "..", "public", "favicon.svg");
+  const svg = fs.readFileSync(iconPath, "utf8");
+  return nativeImage.createFromDataURL(
+    `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`,
+  );
+}
+
+function storageRoot() {
+  const docsPath = app.getPath("documents");
+  const basePath = docsPath && docsPath.trim() ? path.join(docsPath, STORAGE_FOLDER_NAME) : path.join(app.getPath("home"), STORAGE_FOLDER_NAME);
+  fs.mkdirSync(basePath, { recursive: true });
+  return basePath;
+}
+
+function documentsRoot() {
+  const dir = path.join(storageRoot(), "documents");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
+function legacyRoot() {
+  return app.getPath("userData");
+}
+
 function dbPath() {
-  return path.join(userDir("."), "inkwell.db");
+  return path.join(storageRoot(), "inkwell.db");
 }
 
 function filePath(key) {
-  return path.join(userDir("documents"), key.replace(/[^a-zA-Z0-9._-]/g, "_"));
+  return path.join(documentsRoot(), key.replace(/[^a-zA-Z0-9._-]/g, "_"));
 }
+
+function migrateLegacyData() {
+  const targetDb = dbPath();
+  const legacyDb = path.join(legacyRoot(), "inkwell.db");
+  if (fs.existsSync(legacyDb) && !fs.existsSync(targetDb)) {
+    fs.copyFileSync(legacyDb, targetDb);
+  }
+
+  const legacyDocuments = path.join(legacyRoot(), "documents");
+  const targetDocuments = documentsRoot();
+  if (fs.existsSync(legacyDocuments) && fs.statSync(legacyDocuments).isDirectory()) {
+    for (const entry of fs.readdirSync(legacyDocuments)) {
+      const src = path.join(legacyDocuments, entry);
+      const dest = path.join(targetDocuments, entry);
+      if (!fs.existsSync(dest)) {
+        if (fs.statSync(src).isDirectory()) {
+          fs.cpSync(src, dest, { recursive: true });
+        } else {
+          fs.copyFileSync(src, dest);
+        }
+      }
+    }
+  }
+}
+
+migrateLegacyData();
 
 ipcMain.handle("db:read", () => {
   const p = dbPath();
@@ -89,6 +135,7 @@ async function createWindow() {
     minWidth: 1024,
     backgroundColor: "#faf8f4",
     title: "Inkwell — Fill & Sign",
+    icon: loadAppIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

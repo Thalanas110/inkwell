@@ -1,6 +1,9 @@
 {
   "name": "tanstack_start_ts",
+  "version": "1.0.0",
   "private": true,
+  "description": "Offline PDF fill and sign desktop app",
+  "author": "Inkwell",
   "sideEffects": false,
   "type": "module",
   "scripts": {
@@ -12,7 +15,8 @@
     "format": "prettier --write .",
     "electron:dev": "set ELECTRON_START_URL=http://localhost:8080 && electron .",
     "electron:build": "vite build",
-    "electron:package": "npx @electron/packager . \"Inkwell\" --platform=linux --arch=x64 --out=electron-release --overwrite --ignore=\"node_modules\" --ignore=\"^/src\" --ignore=\"^/electron-release\""
+    "electron:package": "npx @electron/packager . \"Inkwell\" --platform=linux --arch=x64 --out=electron-release --overwrite --ignore=\"node_modules\" --ignore=\"^/src\" --ignore=\"^/electron-release\"",
+    "electron:installer": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -80,6 +84,7 @@
     "@types/sql.js": "^1.4.11",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.32.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",
@@ -91,6 +96,27 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
     "vite": "^8.2.0"
+  },
+  "build": {
+    "appId": "com.inkwell.app",
+    "productName": "Inkwell",
+    "directories": {
+      "output": "electron-release"
+    },
+    "files": [
+      ".output/**/*",
+      "electron/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/favicon.svg"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "main": "electron/main.cjs"
 }

@@ -27,6 +27,12 @@ npm run build            # produces the client build in .output/public
 npm run electron:package # @electron/packager -> electron-release/Inkwell-linux-x64
 ```
 
+For a Windows installer, run:
+
+```bash
+npm run electron:installer
+```
+
 For macOS or Windows artifacts, swap the platform flag:
 
 ```bash

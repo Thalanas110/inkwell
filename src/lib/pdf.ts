@@ -11,7 +11,7 @@ export type PdfField = {
 
 export type TextData = { text: string; size: number };
 export type CheckData = { size: number };
-export type SignatureData = { dataUrl: string };
+export type SignatureData = { dataUrl: string; signedAt?: string };
 
 export async function getPdfjs() {
   const pdfjs = await import("pdfjs-dist");
@@ -140,6 +140,21 @@ export async function buildFilledPdf(
       const w = a.w * W;
       const h = a.h * H;
       page.drawImage(img, { x, y: H - yTop - h, width: w, height: h });
+      if (d.signedAt) {
+        const signedAt = new Date(d.signedAt);
+        if (!Number.isNaN(signedAt.getTime())) {
+          page.drawText(
+            `Digitally signed on ${signedAt.toISOString().replace("T", " ").replace(".000Z", " UTC")}`,
+            {
+            x,
+            y: Math.max(4, H - yTop - h - 9),
+            size: 6,
+            font,
+            color: ink,
+            },
+          );
+        }
+      }
     }
   }
 

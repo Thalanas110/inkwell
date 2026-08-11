@@ -194,7 +194,7 @@ export function Editor({ docId }: { docId: string }) {
         type: "signature",
         w: wNorm,
         h: hNorm,
-        data: JSON.stringify({ dataUrl: sig.data_url }),
+        data: JSON.stringify({ dataUrl: sig.data_url, signedAt: new Date().toISOString() }),
       });
     }
     setTool("select");
@@ -578,29 +578,22 @@ function AnnotationBox({
     }
 
     const boxLeft = parent.left + local.x * parent.width;
+    const boxTop = parent.top + local.y * parent.height;
     const nextW = Math.max(
       drag.current.minW,
       Math.min(parent.width - local.x * parent.width, e.clientX - boxLeft),
     );
+    const nextH = Math.max(
+      drag.current.minH,
+      Math.min(parent.height - local.y * parent.height, e.clientY - boxTop),
+    );
 
     if (local.type === "text") {
-      const nextSize = Math.round(drag.current.startSize * (nextW / drag.current.startW));
-      setLocal((l) => ({
-        ...l,
-        w: nextW / parent.width,
-        data: JSON.stringify({
-          ...JSON.parse(l.data || "{}"),
-          size: Math.max(8, Math.min(200, nextSize)),
-        }),
-      }));
-      return;
-    }
-
-    if (local.type === "check") {
+      const widthScale = nextW / drag.current.startW;
+      const heightScale = nextH / drag.current.startH;
       const nextSize = Math.round(
-        drag.current.startSize * (nextW / Math.max(1, drag.current.startW)),
+        drag.current.startSize * Math.min(widthScale, heightScale),
       );
-      const nextH = Math.min(parent.height - local.y * parent.height, nextW);
       setLocal((l) => ({
         ...l,
         w: nextW / parent.width,
@@ -613,12 +606,29 @@ function AnnotationBox({
       return;
     }
 
-    const nextH = Math.max(drag.current.minH, nextW * drag.current.aspect);
+    if (local.type === "check") {
+      const nextSize = Math.round(
+        drag.current.startSize * (nextW / Math.max(1, drag.current.startW)),
+      );
+      const squareH = Math.min(parent.height - local.y * parent.height, nextW);
+      setLocal((l) => ({
+        ...l,
+        w: nextW / parent.width,
+        h: squareH / parent.height,
+        data: JSON.stringify({
+          ...JSON.parse(l.data || "{}"),
+          size: Math.max(8, Math.min(200, nextSize)),
+        }),
+      }));
+      return;
+    }
+
+    const proportionalH = Math.max(drag.current.minH, nextW * drag.current.aspect);
 
     setLocal((l) => ({
       ...l,
       w: nextW / parent.width,
-      h: nextH / parent.height,
+      h: proportionalH / parent.height,
     }));
   };
 
@@ -666,12 +676,12 @@ function AnnotationBox({
             onBlur={() => onChange(local)}
             onPointerDown={(e) => e.stopPropagation()}
             rows={Math.max(1, (data.text ?? "").split("\n").length)}
-            className="w-full resize-none bg-transparent p-0 leading-tight text-ink outline-none"
+            className="h-full w-full resize-none bg-transparent p-0 leading-tight text-ink outline-none"
             style={{ fontSize: (data.size ?? 12) * 1.0 }}
           />
         ) : (
           <span
-            className="block whitespace-pre-wrap leading-tight text-ink"
+            className="block h-full w-full whitespace-pre-wrap leading-tight text-ink"
             style={{ fontSize: (data.size ?? 12) * 1.0 }}
           >
             {data.text || "Text"}

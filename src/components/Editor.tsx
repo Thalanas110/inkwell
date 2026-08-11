@@ -482,9 +482,28 @@ function AnnotationBox({
   onDelete: () => void;
 }) {
   const [local, setLocal] = useState(annotation);
-  const drag = useRef<{ dx: number; dy: number; w: number; h: number } | null>(null);
+  const latest = useRef(annotation);
+  const drag = useRef<
+    | {
+        mode: "move";
+        dx: number;
+        dy: number;
+      }
+    | {
+        mode: "resize";
+        startW: number;
+        startH: number;
+        aspect: number;
+        minW: number;
+        minH: number;
+      }
+    | null
+  >(null);
 
   useEffect(() => setLocal(annotation), [annotation]);
+  useEffect(() => {
+    latest.current = local;
+  }, [local]);
 
   const data = JSON.parse(local.data || "{}") as { text?: string; size?: number; dataUrl?: string };
 
@@ -493,34 +512,68 @@ function AnnotationBox({
     onSelect();
     const parent = e.currentTarget.parentElement!.getBoundingClientRect();
     drag.current = {
+      mode: "move",
       dx: e.clientX - (parent.left + local.x * parent.width),
       dy: e.clientY - (parent.top + local.y * parent.height),
-      w: parent.width,
-      h: parent.height,
     };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const onResizePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!interactive || local.type !== "signature") return;
+    e.stopPropagation();
+    onSelect();
+    const parent = e.currentTarget.parentElement!.parentElement!.getBoundingClientRect();
+    const startW = local.w * parent.width;
+    const startH = local.h * parent.height;
+    drag.current = {
+      mode: "resize",
+      startW,
+      startH,
+      aspect: startH / Math.max(1, startW),
+      minW: 56,
+      minH: 24,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
     const parent = e.currentTarget.parentElement!.getBoundingClientRect();
+    if (drag.current.mode === "move") {
+      setLocal((l) => ({
+        ...l,
+        x: Math.min(0.99, Math.max(0, (e.clientX - drag.current.dx - parent.left) / parent.width)),
+        y: Math.min(0.99, Math.max(0, (e.clientY - drag.current.dy - parent.top) / parent.height)),
+      }));
+      return;
+    }
+
+    const boxLeft = parent.left + local.x * parent.width;
+    const nextW = Math.max(
+      drag.current.minW,
+      Math.min(parent.width - local.x * parent.width, e.clientX - boxLeft),
+    );
+    const nextH = Math.max(drag.current.minH, nextW * drag.current.aspect);
+
     setLocal((l) => ({
       ...l,
-      x: Math.min(0.99, Math.max(0, (e.clientX - drag.current!.dx - parent.left) / parent.width)),
-      y: Math.min(0.99, Math.max(0, (e.clientY - drag.current!.dy - parent.top) / parent.height)),
+      w: nextW / parent.width,
+      h: nextH / parent.height,
     }));
   };
 
   const onPointerUp = () => {
     if (!drag.current) return;
     drag.current = null;
-    onChange(local);
+    onChange(latest.current);
   };
 
   const style: React.CSSProperties = {
     left: `${local.x * 100}%`,
     top: `${local.y * 100}%`,
     width: local.type === "check" ? undefined : `${local.w * 100}%`,
+    height: local.type === "signature" ? `${local.h * 100}%` : undefined,
   };
 
   return (
@@ -570,8 +623,8 @@ function AnnotationBox({
           src={data.dataUrl}
           alt="Signature"
           draggable={false}
-          style={{ width: "100%" }}
-          className="pointer-events-none block"
+          style={{ width: "100%", height: "100%" }}
+          className="pointer-events-none block object-contain"
         />
       )}
 
@@ -584,6 +637,14 @@ function AnnotationBox({
         >
           <Trash2 className="size-3" />
         </button>
+      ) : null}
+
+      {selected && interactive && local.type === "signature" ? (
+        <button
+          aria-label="Resize signature"
+          onPointerDown={onResizePointerDown}
+          className="absolute -bottom-2 -right-2 h-4 w-4 cursor-se-resize rounded-full border border-background bg-primary shadow"
+        />
       ) : null}
     </div>
   );

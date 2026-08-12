@@ -1,6 +1,7 @@
-import initSqlJs, { type Database } from "sql.js";
 import { desktop } from "./desktop";
-import { idbGet, idbSet } from "./idb";
+import { getRuntimeKind } from "./runtime";
+import { createBrowserSqlDriver } from "./storage/browser";
+import type { SqlDriver } from "./storage/types";
 
 export type DocumentRow = {
   id: string;
@@ -32,91 +33,64 @@ export type SignatureRow = {
 
 export type FieldValueRow = { doc_id: string; name: string; type: string; value: string };
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS documents (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  file_key TEXT NOT NULL,
-  page_count INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS annotations (
-  id TEXT PRIMARY KEY,
-  doc_id TEXT NOT NULL,
-  page INTEGER NOT NULL,
-  type TEXT NOT NULL,
-  x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
-  data TEXT NOT NULL DEFAULT '{}'
-);
-CREATE TABLE IF NOT EXISTS field_values (
-  doc_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
-  value TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY (doc_id, name)
-);
-CREATE TABLE IF NOT EXISTS signatures (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  data_url TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-`;
+let driverPromise: Promise<SqlDriver> | null = null;
+let testDriver: SqlDriver | undefined;
 
-let dbPromise: Promise<Database> | null = null;
-
-async function loadExisting(): Promise<Uint8Array | null> {
-  const d = desktop();
-  if (d) return d.readDb();
-  const v = await idbGet<Uint8Array | ArrayBuffer>("inkwell.db");
-  if (!v) return null;
-  return v instanceof Uint8Array ? v : new Uint8Array(v);
+async function getDriver(): Promise<SqlDriver> {
+  if (testDriver) return testDriver;
+  if (!driverPromise) {
+    driverPromise = createRuntimeDriver();
+  }
+  return driverPromise;
 }
 
-async function openDb(): Promise<Database> {
-  const SQL = await initSqlJs({ locateFile: () => "/vendor/sql-wasm.wasm" });
-  const existing = await loadExisting();
-  const db = existing ? new SQL.Database(existing) : new SQL.Database();
-  db.run(SCHEMA);
-  return db;
+async function createRuntimeDriver(): Promise<SqlDriver> {
+  if (getRuntimeKind() === "android") {
+    const { createAndroidSqlDriver } = await import("./storage/android");
+    return createAndroidSqlDriver();
+  }
+
+  const bridge = desktop();
+  return createBrowserSqlDriver({
+    ...(bridge
+      ? {
+          load: () => bridge.readDb(),
+          save: async (bytes: Uint8Array) => {
+            await bridge.writeDb(bytes);
+          },
+        }
+      : {}),
+  });
 }
 
-export function getDb(): Promise<Database> {
-  if (!dbPromise) dbPromise = openDb();
-  return dbPromise;
+export function setSqlDriverForTests(driver: SqlDriver | undefined) {
+  testDriver = driver;
+  driverPromise = null;
+}
+
+export function getDb(): Promise<SqlDriver> {
+  return getDriver();
 }
 
 export async function persist() {
-  const db = await getDb();
-  const bytes = db.export();
-  const d = desktop();
-  if (d) await d.writeDb(bytes);
-  else await idbSet("inkwell.db", bytes);
+  const driver = await getDriver();
+  await driver.persist?.();
 }
 
 async function all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
-  const db = await getDb();
-  const stmt = db.prepare(sql);
-  stmt.bind(params as never);
-  const rows: T[] = [];
-  while (stmt.step()) rows.push(stmt.getAsObject() as unknown as T);
-  stmt.free();
-  return rows;
+  return (await getDriver()).query<T>(sql, params);
 }
 
 async function run(sql: string, params: unknown[] = []) {
-  const db = await getDb();
-  db.run(sql, params as never);
-  await persist();
+  const driver = await getDriver();
+  await driver.run(sql, params);
+  await driver.persist?.();
 }
 
 export const uid = () =>
   typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Date.now().toString(36);
-
-/* ---------- documents ---------- */
 
 export const listDocuments = () =>
   all<DocumentRow>("SELECT * FROM documents ORDER BY updated_at DESC");
@@ -139,14 +113,12 @@ export const renameDocument = (id: string, name: string) =>
   run("UPDATE documents SET name = ?, updated_at = ? WHERE id = ?", [name, Date.now(), id]);
 
 export async function deleteDocument(id: string) {
-  const db = await getDb();
-  db.run("DELETE FROM annotations WHERE doc_id = ?", [id]);
-  db.run("DELETE FROM field_values WHERE doc_id = ?", [id]);
-  db.run("DELETE FROM documents WHERE id = ?", [id]);
-  await persist();
+  const driver = await getDriver();
+  await driver.run("DELETE FROM annotations WHERE doc_id = ?", [id]);
+  await driver.run("DELETE FROM field_values WHERE doc_id = ?", [id]);
+  await driver.run("DELETE FROM documents WHERE id = ?", [id]);
+  await driver.persist?.();
 }
-
-/* ---------- annotations ---------- */
 
 export const listAnnotations = (docId: string) =>
   all<AnnotationRow>("SELECT * FROM annotations WHERE doc_id = ? ORDER BY page", [docId]);
@@ -162,8 +134,6 @@ export const upsertAnnotation = (a: AnnotationRow) =>
 
 export const deleteAnnotation = (id: string) => run("DELETE FROM annotations WHERE id = ?", [id]);
 
-/* ---------- form fields ---------- */
-
 export const listFieldValues = (docId: string) =>
   all<FieldValueRow>("SELECT * FROM field_values WHERE doc_id = ?", [docId]);
 
@@ -173,8 +143,6 @@ export const setFieldValue = (docId: string, name: string, type: string, value: 
      ON CONFLICT(doc_id, name) DO UPDATE SET value=excluded.value, type=excluded.type`,
     [docId, name, type, value],
   );
-
-/* ---------- signatures ---------- */
 
 export const listSignatures = () =>
   all<SignatureRow>("SELECT * FROM signatures ORDER BY created_at DESC");

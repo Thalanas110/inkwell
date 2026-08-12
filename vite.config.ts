@@ -6,6 +6,9 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   plugins: [TanStackRouterVite(), tailwindcss(), react(), tsconfigPaths()],
+  build: {
+    outDir: ".output/public",
+  },
   ssr: {
     noExternal: ["pdfjs-dist"],
   },

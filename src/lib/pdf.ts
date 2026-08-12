@@ -1,4 +1,5 @@
 import type { AnnotationRow, FieldValueRow } from "./db";
+import { normalizeTextRuns, textFromRuns, type TextData, type TextRun } from "./text-runs";
 
 /** Everything here is browser-only: pdfjs/pdf-lib are imported lazily inside the functions. */
 
@@ -9,9 +10,51 @@ export type PdfField = {
   options?: string[];
 };
 
-export type TextData = { text: string; size: number };
 export type CheckData = { size: number };
 export type SignatureData = { dataUrl: string; signedAt?: string };
+
+export type PdfTextRunPlacement = { text: string; x: number; y: number; size: number };
+
+export function layoutTextRuns(
+  runs: TextRun[],
+  x: number,
+  top: number,
+  measure: (text: string, size: number) => number,
+  lineGap = 1.25,
+): PdfTextRunPlacement[] {
+  const placements: PdfTextRunPlacement[] = [];
+  let lineX = x;
+  let lineTop = top;
+  let line: TextRun[] = [];
+
+  const flushLine = () => {
+    if (!line.length) {
+      lineTop -= 12 * lineGap;
+      lineX = x;
+      return;
+    }
+    const lineSize = Math.max(...line.map((run) => run.size));
+    lineX = x;
+    for (const run of line) {
+      if (run.text) {
+        placements.push({ text: run.text, x: lineX, y: lineTop - lineSize, size: run.size });
+        lineX += measure(run.text, run.size);
+      }
+    }
+    lineTop -= lineSize * lineGap;
+    line = [];
+  };
+
+  for (const run of runs) {
+    const parts = run.text.split("\n");
+    parts.forEach((part, index) => {
+      if (part) line.push({ text: part, size: run.size });
+      if (index < parts.length - 1) flushLine();
+    });
+  }
+  if (line.length) flushLine();
+  return placements;
+}
 
 export async function getPdfjs() {
   const pdfjs = await import("pdfjs-dist");
@@ -36,7 +79,11 @@ export async function readFormFields(bytes: Uint8Array): Promise<PdfField[]> {
       return { name, type: "text" as const, value: tf.getText() ?? "" };
     }
     if (kind === "PDFCheckBox") {
-      return { name, type: "checkbox" as const, value: form.getCheckBox(name).isChecked() ? "1" : "" };
+      return {
+        name,
+        type: "checkbox" as const,
+        value: form.getCheckBox(name).isChecked() ? "1" : "",
+      };
     }
     if (kind === "PDFDropdown") {
       const dd = form.getDropdown(name);
@@ -102,17 +149,19 @@ export async function buildFilledPdf(
 
     if (a.type === "text") {
       const d = JSON.parse(a.data) as TextData;
-      if (!d.text) continue;
-      const size = d.size || 12;
-      d.text.split("\n").forEach((line, i) => {
-        page.drawText(line, {
-          x,
-          y: H - yTop - size - i * size * 1.25,
-          size,
+      const runs = normalizeTextRuns(d);
+      if (!textFromRuns(runs)) continue;
+      for (const placement of layoutTextRuns(runs, x, H - yTop, (text, size) =>
+        font.widthOfTextAtSize(text, size),
+      )) {
+        page.drawText(placement.text, {
+          x: placement.x,
+          y: placement.y,
+          size: placement.size,
           font,
           color: ink,
         });
-      });
+      }
     } else if (a.type === "check") {
       const d = JSON.parse(a.data) as CheckData;
       const s = d.size || 14;
@@ -146,11 +195,11 @@ export async function buildFilledPdf(
           page.drawText(
             `Digitally signed on ${signedAt.toISOString().replace("T", " ").replace(".000Z", " UTC")}`,
             {
-            x,
-            y: Math.max(4, H - yTop - h - 9),
-            size: 6,
-            font,
-            color: ink,
+              x,
+              y: Math.max(4, H - yTop - h - 9),
+              size: 6,
+              font,
+              color: ink,
             },
           );
         }

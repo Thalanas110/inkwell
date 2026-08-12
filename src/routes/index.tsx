@@ -1,18 +1,20 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileSignature, FileText, Loader2, Plus, Trash2, Upload } from "lucide-react";
+import { ArrowRight, FileSignature, FileText, Loader2, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  createDocument,
-  deleteDocument,
-  listDocuments,
-  uid,
-  type DocumentRow,
-} from "@/lib/db";
-import { deleteFileBytes, isDesktop, saveFileBytes } from "@/lib/desktop";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { createDocument, deleteDocument, listDocuments, uid, type DocumentRow } from "@/lib/db";
+import { deleteFileBytes, runtimeLabel, saveFileBytes } from "@/lib/desktop";
 import { loadPdfDocument } from "@/lib/pdf";
 
 export const Route = createFileRoute("/")({
@@ -38,10 +40,10 @@ export const Route = createFileRoute("/")({
 });
 
 function Library() {
-  const navigate = useNavigate();
   const [docs, setDocs] = useState<DocumentRow[] | null>(null);
   const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
+  const [deleting, setDeleting] = useState<DocumentRow | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async () => setDocs(await listDocuments()), []);
@@ -83,6 +85,13 @@ function Library() {
     toast.success("Document removed");
   };
 
+  const confirmRemove = async () => {
+    if (!deleting) return;
+    const doc = deleting;
+    setDeleting(null);
+    await remove(doc);
+  };
+
   const filtered = (docs ?? []).filter((d) =>
     d.name.toLowerCase().includes(query.trim().toLowerCase()),
   );
@@ -95,8 +104,7 @@ function Library() {
           <div className="mr-auto">
             <h1 className="font-display text-2xl leading-none">Inkwell</h1>
             <p className="mt-1 text-xs text-muted-foreground">
-              {isDesktop() ? "Desktop · offline" : "Browser preview · offline"} — files stay on this
-              device
+              {runtimeLabel()} — files stay on this device
             </p>
           </div>
           <input
@@ -151,30 +159,61 @@ function Library() {
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2">
             {filtered.map((d) => (
-              <li key={d.id} className="paper-sheet group flex items-center gap-3 rounded-lg p-4">
-                <FileText className="size-5 shrink-0 text-primary" />
-                <button
-                  className="min-w-0 flex-1 text-left"
-                  onClick={() => navigate({ to: "/editor/$id", params: { id: d.id } })}
+              <li
+                key={d.id}
+                className="paper-sheet group relative rounded-lg transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-lift"
+              >
+                <Link
+                  to="/editor/$id"
+                  params={{ id: d.id }}
+                  aria-label={`Open ${d.name}`}
+                  className="flex min-h-20 items-center gap-3 rounded-lg p-4 pr-20 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 >
-                  <p className="truncate text-sm font-medium">{d.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {d.page_count} page{d.page_count === 1 ? "" : "s"} · edited{" "}
-                    {new Date(d.updated_at).toLocaleDateString()}
-                  </p>
-                </button>
+                  <FileText className="size-5 shrink-0 text-primary" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{d.name}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {d.page_count} page{d.page_count === 1 ? "" : "s"} · edited{" "}
+                      {new Date(d.updated_at).toLocaleDateString()}
+                    </span>
+                  </span>
+                  <span className="hidden shrink-0 items-center gap-1 text-xs font-medium text-primary sm:flex">
+                    Open
+                    <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+                  </span>
+                </Link>
                 <button
                   aria-label={`Delete ${d.name}`}
-                  className="opacity-0 transition-opacity group-hover:opacity-100"
-                  onClick={() => remove(d)}
+                  className="absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-md p-2 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => setDeleting(d)}
                 >
-                  <Trash2 className="size-4 text-muted-foreground" />
+                  <Trash2 className="size-4" />
                 </button>
               </li>
             ))}
           </ul>
         )}
       </main>
+
+      <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleting(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete document?</DialogTitle>
+            <DialogDescription>
+              Remove <span className="font-medium text-foreground">{deleting?.name}</span> from your
+              library? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void confirmRemove()}>
+              Delete document
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

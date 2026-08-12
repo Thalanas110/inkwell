@@ -1,0 +1,31 @@
+export const SCHEMA = `
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  file_key TEXT NOT NULL,
+  page_count INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS annotations (
+  id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL,
+  page INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  x REAL NOT NULL, y REAL NOT NULL, w REAL NOT NULL, h REAL NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS field_values (
+  doc_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  value TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (doc_id, name)
+);
+CREATE TABLE IF NOT EXISTS signatures (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  data_url TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
@@ -46,8 +46,23 @@ import {
 } from "@/lib/db";
 import { exportBytes, readFileBytes } from "@/lib/desktop";
 import { buildFilledPdf, loadPdfDocument, readFormFields, type PdfField } from "@/lib/pdf";
+import {
+  applyFontSizeToRange,
+  FONT_SIZES,
+  getFontSizesInRange,
+  normalizeTextRuns,
+  replaceTextPreservingRuns,
+  textFromRuns,
+  type TextData,
+} from "@/lib/text-runs";
+import {
+  restoreSelectionOffsets,
+  selectionOffsets,
+  type TextSelectionOffsets,
+} from "@/lib/selection-offsets";
 
 type Tool = "select" | "text" | "check" | "signature";
+type SelectedTextRange = TextSelectionOffsets & { annotationId: string };
 
 const PAGE_WIDTHS = [520, 640, 760, 900, 1040];
 
@@ -62,6 +77,7 @@ export function Editor({ docId }: { docId: string }) {
   const [activeSignature, setActiveSignature] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedTextRange, setSelectedTextRange] = useState<SelectedTextRange | null>(null);
   const [zoom, setZoom] = useState(2);
   const [flatten, setFlatten] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -130,23 +146,51 @@ export function Editor({ docId }: { docId: string }) {
     };
   }, [docId, refreshSignatures]);
 
-  const persistAnnotation = useCallback(
-    async (a: AnnotationRow) => {
-      setAnnotations((prev) => {
-        const next = prev.some((p) => p.id === a.id)
-          ? prev.map((p) => (p.id === a.id ? a : p))
-          : [...prev, a];
-        return next;
-      });
-      await upsertAnnotation(a);
-      await touchDocument(a.doc_id);
-    },
-    [],
-  );
+  const persistAnnotation = useCallback(async (a: AnnotationRow) => {
+    setAnnotations((prev) => {
+      const next = prev.some((p) => p.id === a.id)
+        ? prev.map((p) => (p.id === a.id ? a : p))
+        : [...prev, a];
+      return next;
+    });
+    await upsertAnnotation(a);
+    await touchDocument(a.doc_id);
+  }, []);
+
+  const selectedFontSize = useMemo(() => {
+    if (!selectedTextRange || selectedTextRange.annotationId !== selected) return null;
+    const annotation = annotations.find((a) => a.id === selectedTextRange.annotationId);
+    if (!annotation || annotation.type !== "text") return null;
+    const data = JSON.parse(annotation.data || "{}") as TextData;
+    const sizes = getFontSizesInRange(
+      normalizeTextRuns(data),
+      selectedTextRange.start,
+      selectedTextRange.end,
+    );
+    return sizes.length === 1 ? sizes[0] : null;
+  }, [annotations, selected, selectedTextRange]);
+
+  const applySelectedFontSize = async (size: number) => {
+    if (!selectedTextRange) return;
+    const annotation = annotations.find((a) => a.id === selectedTextRange.annotationId);
+    if (!annotation || annotation.type !== "text") return;
+    const data = JSON.parse(annotation.data || "{}") as TextData;
+    const runs = applyFontSizeToRange(
+      normalizeTextRuns(data),
+      selectedTextRange.start,
+      selectedTextRange.end,
+      size,
+    );
+    await persistAnnotation({
+      ...annotation,
+      data: JSON.stringify({ ...data, text: textFromRuns(runs), runs }),
+    });
+  };
 
   const handlePageClick = async (page: number, rel: { x: number; y: number }) => {
     if (tool === "select") {
       setSelected(null);
+      setSelectedTextRange(null);
       return;
     }
     const size = pageSizes.current[page];
@@ -274,7 +318,9 @@ export function Editor({ docId }: { docId: string }) {
         >
           {mobileMenuOpen ? <X className="size-4" /> : <Menu className="size-4" />}
         </Button>
-        <div className={`editor-actions ${mobileMenuOpen ? "is-open" : ""} ml-auto flex items-center gap-2`}>
+        <div
+          className={`editor-actions ${mobileMenuOpen ? "is-open" : ""} ml-auto flex items-center gap-2`}
+        >
           <Button
             variant="ghost"
             size="icon"
@@ -303,6 +349,25 @@ export function Editor({ docId }: { docId: string }) {
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
             Export signed PDF
           </Button>
+          <label className="flex items-center gap-2 pl-2 text-xs text-muted-foreground">
+            Font size
+            <select
+              aria-label="Font size"
+              value={selectedTextRange ? String(selectedFontSize ?? "") : ""}
+              disabled={!selectedTextRange}
+              onChange={(event) => void applySelectedFontSize(Number(event.target.value))}
+              className="h-8 rounded-md border bg-card px-2 text-sm text-foreground"
+            >
+              <option value="" disabled>
+                {selectedFontSize === null ? "Mixed" : "—"}
+              </option>
+              {FONT_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </header>
 
@@ -342,7 +407,12 @@ export function Editor({ docId }: { docId: string }) {
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Signatures
             </p>
-            <Button variant="ghost" size="icon" aria-label="New signature" onClick={() => setPadOpen(true)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="New signature"
+              onClick={() => setPadOpen(true)}
+            >
               <Plus className="size-4" />
             </Button>
           </div>
@@ -411,7 +481,17 @@ export function Editor({ docId }: { docId: string }) {
                         annotation={a}
                         selected={selected === a.id}
                         interactive={tool === "select"}
-                        onSelect={() => setSelected(a.id)}
+                        onSelect={() => {
+                          setSelected(a.id);
+                          setSelectedTextRange(null);
+                        }}
+                        onTextSelectionChange={(range) =>
+                          setSelectedTextRange(
+                            range && range.start !== range.end
+                              ? { ...range, annotationId: a.id }
+                              : null,
+                          )
+                        }
                         onChange={persistAnnotation}
                         onDelete={() => removeAnnotation(a.id)}
                       />
@@ -496,6 +576,7 @@ function AnnotationBox({
   selected,
   interactive,
   onSelect,
+  onTextSelectionChange,
   onChange,
   onDelete,
 }: {
@@ -503,11 +584,14 @@ function AnnotationBox({
   selected: boolean;
   interactive: boolean;
   onSelect: () => void;
+  onTextSelectionChange: (range: TextSelectionOffsets | null) => void;
   onChange: (a: AnnotationRow) => void;
   onDelete: () => void;
 }) {
   const [local, setLocal] = useState(annotation);
   const latest = useRef(annotation);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const selectionRef = useRef<TextSelectionOffsets | null>(null);
   const drag = useRef<
     | {
         mode: "move";
@@ -515,7 +599,7 @@ function AnnotationBox({
         dy: number;
       }
     | {
-      mode: "resize";
+        mode: "resize";
         startW: number;
         startH: number;
         aspect: number;
@@ -531,7 +615,53 @@ function AnnotationBox({
     latest.current = local;
   }, [local]);
 
-  const data = JSON.parse(local.data || "{}") as { text?: string; size?: number; dataUrl?: string };
+  useLayoutEffect(() => {
+    if (selected && local.type === "text" && editorRef.current && selectionRef.current) {
+      restoreSelectionOffsets(editorRef.current, selectionRef.current);
+    }
+  }, [local, selected]);
+
+  let data: TextData = {};
+  try {
+    data = JSON.parse(local.data || "{}") as TextData;
+  } catch {
+    data = {};
+  }
+  const runs = local.type === "text" ? normalizeTextRuns(data) : [];
+
+  const captureSelection = (includeCollapsed = false) => {
+    const root = editorRef.current;
+    const next = root ? selectionOffsets(root, window.getSelection(), includeCollapsed) : null;
+    selectionRef.current = next;
+    onTextSelectionChange(next);
+  };
+
+  const updateTextFromEditor = () => {
+    const root = editorRef.current;
+    if (!root) return;
+    const nextText = (root.innerText ?? root.textContent ?? "").replace(/\r\n/g, "\n");
+    captureSelection(true);
+    const nextRuns = replaceTextPreservingRuns(runs, nextText, runs[0]?.size);
+    const next = {
+      ...local,
+      data: JSON.stringify({ ...data, text: textFromRuns(nextRuns), runs: nextRuns }),
+    };
+    setLocal(next);
+  };
+
+  const insertLineBreak = () => {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const lineBreak = document.createTextNode("\n");
+    range.insertNode(lineBreak);
+    range.setStartAfter(lineBreak);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    updateTextFromEditor();
+  };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!interactive) return;
@@ -588,24 +718,6 @@ function AnnotationBox({
       Math.min(parent.height - local.y * parent.height, e.clientY - boxTop),
     );
 
-    if (local.type === "text") {
-      const widthScale = nextW / drag.current.startW;
-      const heightScale = nextH / drag.current.startH;
-      const nextSize = Math.round(
-        drag.current.startSize * Math.min(widthScale, heightScale),
-      );
-      setLocal((l) => ({
-        ...l,
-        w: nextW / parent.width,
-        h: nextH / parent.height,
-        data: JSON.stringify({
-          ...JSON.parse(l.data || "{}"),
-          size: Math.max(8, Math.min(200, nextSize)),
-        }),
-      }));
-      return;
-    }
-
     if (local.type === "check") {
       const nextSize = Math.round(
         drag.current.startSize * (nextW / Math.max(1, drag.current.startW)),
@@ -642,8 +754,7 @@ function AnnotationBox({
     left: `${local.x * 100}%`,
     top: `${local.y * 100}%`,
     width: `${local.w * 100}%`,
-    height:
-      local.type === "signature" ? `${local.h * 100}%` : undefined,
+    height: local.type === "signature" || local.type === "text" ? `${local.h * 100}%` : undefined,
     aspectRatio: local.type === "check" ? "1" : undefined,
   };
 
@@ -661,30 +772,52 @@ function AnnotationBox({
         }
       }}
       className={`absolute select-none ${interactive ? "cursor-move" : "cursor-default"} ${
-        selected ? "outline outline-2 outline-primary" : "hover:outline hover:outline-1 hover:outline-primary/50"
+        selected
+          ? "outline outline-2 outline-primary"
+          : "hover:outline hover:outline-1 hover:outline-primary/50"
       }`}
     >
       {local.type === "text" ? (
         selected ? (
-          <textarea
+          <div
+            ref={editorRef}
             autoFocus
-            value={data.text ?? ""}
-            onChange={(e) => {
-              const next = { ...local, data: JSON.stringify({ ...data, text: e.target.value }) };
-              setLocal(next);
-            }}
-            onBlur={() => onChange(local)}
+            contentEditable
+            suppressContentEditableWarning
+            role="textbox"
+            aria-multiline="true"
+            onInput={updateTextFromEditor}
+            onBlur={() => onChange(latest.current)}
             onPointerDown={(e) => e.stopPropagation()}
-            rows={Math.max(1, (data.text ?? "").split("\n").length)}
-            className="h-full w-full resize-none bg-transparent p-0 leading-tight text-ink outline-none"
-            style={{ fontSize: (data.size ?? 12) * 1.0 }}
-          />
-        ) : (
-          <span
-            className="block h-full w-full whitespace-pre-wrap leading-tight text-ink"
-            style={{ fontSize: (data.size ?? 12) * 1.0 }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                insertLineBreak();
+              }
+            }}
+            onMouseUp={() => captureSelection()}
+            onKeyUp={() => captureSelection(true)}
+            onSelect={() => captureSelection()}
+            className="h-full w-full overflow-auto whitespace-pre-wrap bg-transparent p-0 leading-tight text-ink outline-none"
           >
-            {data.text || "Text"}
+            {runs.map((run, index) => (
+              <span key={`${index}-${run.size}-${run.text.length}`} style={{ fontSize: run.size }}>
+                {run.text}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <span className="block h-full w-full whitespace-pre-wrap leading-tight text-ink">
+            {runs[0]?.text
+              ? runs.map((run, index) => (
+                  <span
+                    key={`${index}-${run.size}-${run.text.length}`}
+                    style={{ fontSize: run.size }}
+                  >
+                    {run.text}
+                  </span>
+                ))
+              : "Text"}
           </span>
         )
       ) : local.type === "check" ? (
@@ -695,7 +828,7 @@ function AnnotationBox({
         />
       ) : (
         <img
-          src={data.dataUrl}
+          src={data["dataUrl"] as string | undefined}
           alt="Signature"
           draggable={false}
           style={{ width: "100%", height: "100%" }}

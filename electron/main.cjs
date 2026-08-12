@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog, nativeImage } = require("electron")
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
+const os = require("os");
+const { startElectronApp } = require("./startup.cjs");
 
 const DEV_URL = process.env.ELECTRON_START_URL || "";
 const STORAGE_FOLDER_NAME = "Inkwell";
@@ -63,7 +65,28 @@ function migrateLegacyData() {
   }
 }
 
-migrateLegacyData();
+function writeStartupError(error) {
+  const logPath = path.join(os.tmpdir(), "Inkwell-startup-error.log");
+  const details = error instanceof Error ? error.stack || error.message : String(error);
+  fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${details}\n`, "utf8");
+  return logPath;
+}
+
+process.on("uncaughtException", (error) => {
+  const logPath = writeStartupError(error);
+  if (app.isReady()) {
+    dialog.showErrorBox("Inkwell could not start", `${error.message}\n\nDetails: ${logPath}`);
+  }
+  app.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  const logPath = writeStartupError(reason);
+  if (app.isReady()) {
+    dialog.showErrorBox("Inkwell could not start", `${String(reason)}\n\nDetails: ${logPath}`);
+  }
+  app.exit(1);
+});
 
 ipcMain.handle("db:read", () => {
   const p = dbPath();
@@ -164,7 +187,15 @@ async function createWindow() {
   await win.loadURL(url);
 }
 
-app.whenReady().then(createWindow);
+startElectronApp({
+  whenReady: () => app.whenReady(),
+  migrateLegacyData,
+  createWindow,
+}).catch((error) => {
+  const logPath = writeStartupError(error);
+  dialog.showErrorBox("Inkwell could not start", `${error.message}\n\nDetails: ${logPath}`);
+  app.exit(1);
+});
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });

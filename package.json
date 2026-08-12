@@ -1,6 +1,6 @@
 {
   "name": "tanstack_start_ts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Offline PDF fill and sign desktop app",
   "author": "Inkwell",
@@ -20,7 +20,7 @@
     "electron:dev": "set ELECTRON_START_URL=http://localhost:8080 && electron .",
     "electron:build": "vite build",
     "electron:package": "npx @electron/packager . \"Inkwell\" --platform=linux --arch=x64 --out=electron-release --overwrite --ignore=\"node_modules\" --ignore=\"^/src\" --ignore=\"^/electron-release\"",
-    "electron:installer": "npm run build && electron-builder --win nsis"
+    "electron:installer": "npm run build && node scripts/electron-installer.mjs"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.1",
